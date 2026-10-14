@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook Tic-Tac-Toe</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<style>
+[hidden] { display: none !important; }
+/* Layout: one narrow column on graph paper (blackboard in dark): title, status, board, tally-mark scores, settings. */
+:root {
+  --paper: #f6f9fd;
+  --rule: #d3e0f2;
+  --ink: #1b2942;
+  --muted: #56637a;
+  --pencil: #3d4a61;
+  --x: #1c4fd0;
+  --o: #cf2f3c;
+  --hover: rgba(28, 79, 208, 0.07);
+  --display: "Kalam", "Comic Sans MS", "Segoe Print", cursive;
+  --ui: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #1e2a27;
+    --rule: #283733;
+    --ink: #eef2e9;
+    --muted: #a9b7ae;
+    --pencil: #dde4d9;
+    --x: #9ccbff;
+    --o: #ffd97a;
+    --hover: rgba(238, 242, 233, 0.07);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #1e2a27;
+  --rule: #283733;
+  --ink: #eef2e9;
+  --muted: #a9b7ae;
+  --pencil: #dde4d9;
+  --x: #9ccbff;
+  --o: #ffd97a;
+  --hover: rgba(238, 242, 233, 0.07);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(var(--rule) 1px, transparent 1px),
+    linear-gradient(90deg, var(--rule) 1px, transparent 1px);
+  background-size: 24px 24px;
+  color: var(--ink);
+  font-family: var(--ui);
+  font-size: 16px;
+  line-height: 1.45;
+  padding-inline: 16px;
+  padding-block: 28px 40px;
+}
+main {
+  max-width: 420px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+h1 {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: clamp(2.2rem, 9vw, 3rem);
+  line-height: 1;
+  margin: 0;
+  text-wrap: balance;
+  transform: rotate(-1.5deg);
+  transform-origin: left center;
+}
+h1 .x { color: var(--x); }
+h1 .o { color: var(--o); }
+
+.status {
+  font-family: var(--display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 0;
+  min-height: 1.2em;
+}
+.status[data-mark="X"] { color: var(--x); }
+.status[data-mark="O"] { color: var(--o); }
+
+/* Board */
+.board-wrap { position: relative; width: 100%; aspect-ratio: 1; max-width: 100%; }
+.board {
+  position: absolute; inset: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+}
+.cell {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  padding: 10%;
+  margin: 0;
+  cursor: pointer;
+  color: inherit;
+  display: grid;
+  place-items: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.cell[aria-disabled="true"] { cursor: default; }
+.cell:not([aria-disabled="true"]):hover { background: var(--hover); }
+.cell:focus-visible { outline: 3px solid var(--ink); outline-offset: -6px; }
+.cell svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.lines .grid path { stroke: var(--pencil); stroke-width: 4; fill: none; stroke-linecap: round; }
+.stroke {
+  fill: none;
+  stroke-width: 8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+}
+.mark-X .stroke, .win-X { stroke: var(--x); }
+.mark-O .stroke, .win-O { stroke: var(--o); }
+.draw .stroke { animation: draw 0.22s ease-out both; }
+.draw .stroke + .stroke { animation-delay: 0.16s; }
+.mark-O.draw .stroke { animation-duration: 0.34s; }
+.win { stroke-width: 7; }
+.win.draw { animation: draw 0.4s 0.15s ease-out both; }
+@keyframes draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .draw .stroke, .win.draw { animation: none; }
+}
+
+/* Scores */
+.scores {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+.score { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.score dt {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.score dd { margin: 0; display: flex; flex-direction: column; gap: 2px; }
+.score .num {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 1.75rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.score-X .num, .score-X .tally { color: var(--x); }
+.score-O .num, .score-O .tally { color: var(--o); }
+.tally { display: flex; flex-wrap: wrap; gap: 4px 6px; min-height: 22px; color: var(--pencil); }
+.tally svg { width: 30px; height: 22px; display: block; }
+
+/* Controls */
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+button.btn {
+  font: 700 1rem var(--ui);
+  color: var(--ink);
+  background: var(--paper);
+  border: 2px solid var(--pencil);
+  border-radius: 8px;
+  padding: 9px 16px;
+  cursor: pointer;
+}
+button.btn:hover { background: var(--rule); }
+button.btn.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+button.btn.primary:hover { opacity: 0.88; }
+button.btn:focus-visible { outline: 3px solid var(--x); outline-offset: 2px; }
+
+.settings { display: flex; flex-wrap: wrap; gap: 14px 24px; }
+fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.seg { display: inline-flex; border: 2px solid var(--pencil); border-radius: 8px; overflow: hidden; background: var(--paper); }
+.seg input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.seg label { padding: 7px 14px; cursor: pointer; font-weight: 700; font-size: 0.95rem; }
+.seg label + input + label { border-left: 2px solid var(--pencil); }
+.seg input:checked + label { background: var(--ink); color: var(--paper); }
+.seg input:focus-visible + label { outline: 3px solid var(--x); outline-offset: -3px; }
+.note { margin: 0; color: var(--muted); font-size: 0.9rem; max-width: 65ch; }
+</style>
+</head>
+<body>
+
+<main>
+  <h1>Tic<span class="x">&#215;</span>Tac<span class="o">&#9675;</span>Toe</h1>
+
+  <p class="status" id="status" aria-live="polite">Your turn</p>
+
+  <div class="board-wrap">
+    <svg class="lines" viewBox="0 0 300 300" aria-hidden="true">
+      <g class="grid">
+        <path d="M100 8 C 97 100, 103 200, 100 292"/>
+        <path d="M200 8 C 203 96, 197 204, 201 292"/>
+        <path d="M8 100 C 100 103, 200 97, 292 101"/>
+        <path d="M8 200 C 96 197, 204 203, 292 199"/>
+      </g>
+      <g id="winline"></g>
+    </svg>
+    <div class="board" id="board" role="group" aria-label="Game board"></div>
+  </div>
+
+  <dl class="scores">
+    <div class="score score-X"><dt id="label-X">You (X)</dt><dd><span class="num" id="num-X">0</span><span class="tally" id="tally-X" aria-hidden="true"></span></dd></div>
+    <div class="score score-D"><dt>Draws</dt><dd><span class="num" id="num-D">0</span><span class="tally" id="tally-D" aria-hidden="true"></span></dd></div>
+    <div class="score score-O"><dt id="label-O">Computer (O)</dt><dd><span class="num" id="num-O">0</span><span class="tally" id="tally-O" aria-hidden="true"></span></dd></div>
+  </dl>
+
+  <div class="actions">
+    <button class="btn" id="new-round" type="button">New round</button>
+    <button class="btn" id="clear-scores" type="button">Clear scores</button>
+  </div>
+
+  <div class="settings">
+    <fieldset>
+      <legend>Play against</legend>
+      <div class="seg">
+        <input type="radio" name="opponent" id="opp-computer" value="computer" checked><label for="opp-computer">Computer</label>
+        <input type="radio" name="opponent" id="opp-friend" value="friend"><label for="opp-friend">A friend</label>
+      </div>
+    </fieldset>
+    <fieldset id="level-set">
+      <legend>Computer skill</legend>
+      <div class="seg">
+        <input type="radio" name="level" id="lvl-easy" value="easy"><label for="lvl-easy">Easy</label>
+        <input type="radio" name="level" id="lvl-hard" value="hard" checked><label for="lvl-hard">Unbeatable</label>
+      </div>
+    </fieldset>
+  </div>
+
+  <p class="note" id="note"></p>
+</main>
+
+<script>
+(function () {
+  var LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  var MARKS = {
+    X: '<path class="stroke" pathLength="1" d="M23 21 C 40 41, 61 60, 78 80"/><path class="stroke" pathLength="1" d="M78 20 C 61 42, 40 59, 22 81"/>',
+    O: '<path class="stroke" pathLength="1" d="M53 19 C 31 16, 17 35, 19 54 C 21 74, 39 85, 56 81 C 75 77, 85 58, 81 40 C 77 26, 65 17, 47 21"/>'
+  };
+  var STORE = 'notebook-ttt';
+  var $ = function (id) { return document.getElementById(id); };
+  var boardEl = $('board'), statusEl = $('status'), winEl = $('winline');
+  var cells = [], timer = null;
+
+  var s = {
+    board: ['', '', '', '', '', '', '', '', ''],
+    turn: 'X',
+    starter: 'X',
+    opponent: 'computer',
+    level: 'hard',
+    scores: { computer: { X: 0, O: 0, D: 0 }, friend: { X: 0, O: 0, D: 0 } }
+  };
+
+  function result(b) {
+    for (var i = 0; i < LINES.length; i++) {
+      var l = LINES[i];
+      if (b[l[0]] && b[l[0]] === b[l[1]] && b[l[0]] === b[l[2]]) return { mark: b[l[0]], line: l };
+    }
+    return b.indexOf('') === -1 ? { mark: 'D', line: null } : null;
+  }
+
+  function other(m) { return m === 'X' ? 'O' : 'X'; }
+  function computersTurn() { return s.opponent === 'computer' && s.turn === 'O' && !result(s.board); }
+
+  // Minimax from O's point of view: +1 O wins, -1 X wins, 0 draw.
+  function minimax(b, turn) {
+    var r = result(b);
+    if (r) return r.mark === 'O' ? 1 : r.mark === 'X' ? -1 : 0;
+    var best = turn === 'O' ? -2 : 2;
+    for (var i = 0; i < 9; i++) {
+      if (b[i]) continue;
+      b[i] = turn;
+      var v = minimax(b, other(turn));
+      b[i] = '';
+      best = turn === 'O' ? Math.max(best, v) : Math.min(best, v);
+    }
+    return best;
+  }
+
+  function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
+
+  function computerMove() {
+    var empty = [];
+    for (var i = 0; i < 9; i++) if (!s.board[i]) empty.push(i);
+    if (s.level === 'easy' && Math.random() < 0.6) return pick(empty);
+    var best = -2, moves = [];
+    empty.forEach(function (i) {
+      s.board[i] = 'O';
+      var v = minimax(s.board, 'X');
+      s.board[i] = '';
+      if (v > best) { best = v; moves = [i]; }
+      else if (v === best) moves.push(i);
+    });
+    return pick(moves);
+  }
+
+  function place(i) {
+    s.board[i] = s.turn;
+    var r = result(s.board);
+    if (r) {
+      s.scores[s.opponent][r.mark]++;
+      save();
+    } else {
+      s.turn = other(s.turn);
+    }
+    render(true);
+    queueComputer();
+  }
+
+  function queueComputer() {
+    clearTimeout(timer);
+    if (computersTurn()) timer = setTimeout(function () { if (computersTurn()) place(computerMove()); }, 550);
+  }
+
+  function newRound() {
+    clearTimeout(timer);
+    if (result(s.board)) s.starter = other(s.starter);
+    s.board = ['', '', '', '', '', '', '', '', ''];
+    s.turn = s.starter;
+    render(true);
+    queueComputer();
+  }
+
+  function tally(n) {
+    var out = '';
+    n = Math.min(n, 50);
+    for (var g = 0; g < n; g += 5) {
+      var k = Math.min(5, n - g), p = '';
+      for (var j = 0; j < Math.min(k, 4); j++) p += 'M' + (5 + j * 6) + ' 3 L' + (4 + j * 6) + ' 19 ';
+      if (k === 5) p += 'M1 17 L28 5';
+      out += '<svg viewBox="0 0 30 22"><path d="' + p + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+    }
+    return out;
+  }
+
+  function render(animate) {
+    var r = result(s.board), vsComputer = s.opponent === 'computer';
+
+    cells.forEach(function (cell, i) {
+      var m = s.board[i];
+      if (cell.dataset.mark !== m) {
+        cell.dataset.mark = m;
+        cell.innerHTML = m ? '<svg viewBox="0 0 100 100" class="mark-' + m + (animate ? ' draw' : '') + '" style="transform:rotate(' + ((i * 37) % 9 - 4) + 'deg)">' + MARKS[m] + '</svg>' : '';
+      }
+      var blocked = !!m || !!r || computersTurn();
+      cell.setAttribute('aria-disabled', blocked ? 'true' : 'false');
+      cell.setAttribute('aria-label', 'Row ' + (Math.floor(i / 3) + 1) + ', column ' + (i % 3 + 1) + ', ' + (m || 'empty'));
+    });
+
+    var key = r && r.line ? r.line.join('') : '';
+    if (winEl.dataset.key !== key) {
+      winEl.dataset.key = key;
+      if (key) {
+        var a = r.line[0], c = r.line[2];
+        var x1 = a % 3 * 100 + 50, y1 = Math.floor(a / 3) * 100 + 50;
+        var x2 = c % 3 * 100 + 50, y2 = Math.floor(c / 3) * 100 + 50;
+        var len = Math.hypot(x2 - x1, y2 - y1), ux = (x2 - x1) / len * 34, uy = (y2 - y1) / len * 34;
+        winEl.innerHTML = '<path class="stroke win win-' + r.mark + (animate ? ' draw' : '') + '" pathLength="1" d="M' + (x1 - ux) + ' ' + (y1 - uy + 2) + ' L' + (x2 + ux) + ' ' + (y2 + uy - 2) + '"/>';
+      } else {
+        winEl.innerHTML = '';
+      }
+    }
+
+    var text, mark = '';
+    if (r && r.mark === 'D') text = "It's a draw";
+    else if (r) { mark = r.mark; text = vsComputer ? (r.mark === 'X' ? 'You win this round' : 'Computer wins this round') : r.mark + ' wins this round'; }
+    else { mark = s.turn; text = vsComputer ? (s.turn === 'X' ? 'Your turn' : 'Computer is thinking…') : s.turn + ' to play'; }
+    statusEl.textContent = text;
+    statusEl.dataset.mark = mark;
+
+    var sc = s.scores[s.opponent];
+    ['X', 'D', 'O'].forEach(function (k) {
+      $('num-' + k).textContent = sc[k];
+      $('tally-' + k).innerHTML = tally(sc[k]);
+    });
+    $('label-X').textContent = vsComputer ? 'You (X)' : 'Player X';
+    $('label-O').textContent = vsComputer ? 'Computer (O)' : 'Player O';
+    $('level-set').hidden = !vsComputer;
+    $('new-round').classList.toggle('primary', !!r);
+    $('note').textContent = (vsComputer ? 'You play X. ' : 'Pass the device between turns. ') + 'The first move swaps sides after every finished round.';
+  }
+
+  function save() {
+    try { localStorage.setItem(STORE, JSON.stringify({ opponent: s.opponent, level: s.level, scores: s.scores })); } catch (e) {}
+  }
+  function load() {
+    try {
+      var d = JSON.parse(localStorage.getItem(STORE) || 'null');
+      if (!d) return;
+      if (d.opponent === 'computer' || d.opponent === 'friend') s.opponent = d.opponent;
+      if (d.level === 'easy' || d.level === 'hard') s.level = d.level;
+      ['computer', 'friend'].forEach(function (m) {
+        ['X', 'O', 'D'].forEach(function (k) {
+          var v = d.scores && d.scores[m] && d.scores[m][k];
+          if (Number.isInteger(v) && v >= 0) s.scores[m][k] = v;
+        });
+      });
+    } catch (e) {}
+  }
+
+  function start(data) {
+    load();
+    if (data && Array.isArray(data.board) && data.board.length === 9) {
+      s.board = data.board.map(function (m) { return m === 'X' || m === 'O' ? m : ''; });
+      if (data.turn === 'X' || data.turn === 'O') s.turn = data.turn;
+      if (data.starter === 'X' || data.starter === 'O') s.starter = data.starter;
+      if (data.opponent === 'computer' || data.opponent === 'friend') s.opponent = data.opponent;
+      if (data.level === 'easy' || data.level === 'hard') s.level = data.level;
+    }
+
+    for (var i = 0; i < 9; i++) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'cell';
+      b.id = 'cell-' + i;
+      b.dataset.index = i;
+      b.dataset.mark = '';
+      boardEl.appendChild(b);
+      cells.push(b);
+    }
+
+    boardEl.addEventListener('click', function (e) {
+      var cell = e.target.closest('.cell');
+      if (!cell) return;
+      var i = +cell.dataset.index;
+      if (s.board[i] || result(s.board) || computersTurn()) return;
+      place(i);
+    });
+
+    boardEl.addEventListener('keydown', function (e) {
+      var cell = e.target.closest('.cell');
+      if (!cell) return;
+      var i = +cell.dataset.index, row = Math.floor(i / 3), col = i % 3;
+      if (e.key === 'ArrowLeft') col = (col + 2) % 3;
+      else if (e.key === 'ArrowRight') col = (col + 1) % 3;
+      else if (e.key === 'ArrowUp') row = (row + 2) % 3;
+      else if (e.key === 'ArrowDown') row = (row + 1) % 3;
+      else return;
+      e.preventDefault();
+      cells[row * 3 + col].focus();
+    });
+
+    $('new-round').addEventListener('click', newRound);
+    $('clear-scores').addEventListener('click', function () {
+      s.scores[s.opponent] = { X: 0, O: 0, D: 0 };
+      save();
+      render(true);
+    });
+
+    document.querySelectorAll('input[name="opponent"]').forEach(function (el) {
+      el.checked = el.value === s.opponent;
+      el.addEventListener('change', function () {
+        if (!el.checked) return;
+        s.opponent = el.value;
+        s.starter = 'X';
+        save();
+        clearTimeout(timer);
+        s.board = ['', '', '', '', '', '', '', '', ''];
+        s.turn = 'X';
+        render(true);
+      });
+    });
+    document.querySelectorAll('input[name="level"]').forEach(function (el) {
+      el.checked = el.value === s.level;
+      el.addEventListener('change', function () {
+        if (el.checked) { s.level = el.value; save(); }
+      });
+    });
+
+    render(false);
+    queueComputer();
+  }
+
+  var hot = window.claude && window.claude.hot;
+  if (hot && hot.snapshot) {
+    hot.snapshot(function () {
+      return { board: s.board, turn: s.turn, starter: s.starter, opponent: s.opponent, level: s.level };
+    });
+  }
+  if (hot && hot.ready) hot.ready(start);
+  else start((hot && hot.data) || {});
+})();
+</script>
+</body>
+</html>
