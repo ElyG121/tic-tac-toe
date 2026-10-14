@@ -123,6 +123,28 @@ h1 .o { color: var(--o); }
 .lines .live { fill: var(--hover); }
 .lines .big .stroke { stroke-width: 9; }
 .cell.dim svg { opacity: 0.3; }
+/* 3D cube: a WebGL view you drag to turn, with a flat layer map (Top / Middle / Bottom) underneath. */
+.cube-wrap { display: flex; flex-direction: column; gap: 10px; }
+.cube-view { position: relative; width: 100%; aspect-ratio: 1; touch-action: none; cursor: grab; }
+.cube-view.over { cursor: pointer; }
+.cube-view.dragging { cursor: grabbing; }
+.cube-view canvas { display: block; width: 100%; height: 100%; }
+.cube-msg { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 16px; text-align: center; color: var(--muted); }
+.cube-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; font-weight: 700; font-size: 0.9rem; color: var(--muted); }
+.cube-tools input[type="range"] { width: 140px; accent-color: var(--ink); }
+.board-wrap.layers { aspect-ratio: auto; }
+.board-wrap.layers .lines { display: none; }
+.board.layers {
+  position: static;
+  grid-template-columns: repeat(3, 1fr) 14px repeat(3, 1fr) 14px repeat(3, 1fr);
+  grid-template-rows: auto;
+  gap: 3px;
+}
+.layer-name { grid-row: 1; padding-bottom: 2px; text-align: center; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.board.layers .cell { aspect-ratio: 1; padding: 14%; border-radius: 6px; box-shadow: inset 0 0 0 1.5px var(--rule); }
+.board.layers .cell.won { box-shadow: inset 0 0 0 3px currentColor; }
+.cell.won[data-mark="X"] { color: var(--x); }
+.cell.won[data-mark="O"] { color: var(--o); }
 .stroke {
   fill: none;
   stroke-width: 8;
@@ -204,6 +226,7 @@ legend {
 .seg label + input + label { border-left: 2px solid var(--pencil); }
 .seg input:checked + label { background: var(--ink); color: var(--paper); }
 .seg input:focus-visible + label { outline: 3px solid var(--x); outline-offset: -3px; }
+.seg input:disabled + label { opacity: 0.45; cursor: not-allowed; }
 .note { margin: 0; color: var(--muted); font-size: 0.9rem; max-width: 65ch; }
 </style>
 </head>
@@ -214,7 +237,18 @@ legend {
 
   <p class="status" id="status" aria-live="polite">Your turn</p>
 
-  <div class="board-wrap">
+  <div class="cube-wrap" id="cube-wrap" hidden>
+    <div class="cube-view" id="cube-view" role="img" aria-label="3D view of the cube. Use the layer map below to play with a keyboard.">
+      <p class="cube-msg" id="cube-msg"></p>
+    </div>
+    <div class="cube-tools">
+      <label for="spread">Spread</label>
+      <input type="range" id="spread" min="1" max="2.2" step="0.05" value="1.5">
+      <button class="btn" id="reset-view" type="button">Reset view</button>
+    </div>
+  </div>
+
+  <div class="board-wrap" id="board-wrap">
     <svg class="lines" viewBox="0 0 300 300" aria-hidden="true">
       <g id="boards"></g>
       <g class="grid" id="grid"></g>
@@ -250,6 +284,7 @@ legend {
         <input type="radio" name="size" id="size-4" value="4"><label for="size-4">4&#215;4</label>
         <input type="radio" name="size" id="size-5" value="5"><label for="size-5">5&#215;5</label>
         <input type="radio" name="size" id="size-9" value="9"><label for="size-9">Ultimate</label>
+        <input type="radio" name="size" id="size-27" value="27"><label for="size-27">3D</label>
       </div>
     </fieldset>
     <fieldset id="level-set">
@@ -266,8 +301,10 @@ legend {
 
 <script>
 (function () {
-  var WIN_LENGTH = { 3: 3, 4: 4, 5: 4, 9: 3 }; // marks (Ultimate: small boards) in a row needed to win per size
+  var WIN_LENGTH = { 3: 3, 4: 4, 5: 4, 9: 3, 27: 3 }; // marks (Ultimate: small boards) in a row needed to win per size
   var ULTIMATE = 9; // Ultimate is stored as a 9×9 board
+  var CUBE = 27; // the 3D cube: 27 cells, stored layer by layer (top first), each layer row by row
+  var LAYER_NAMES = ['Top', 'Middle', 'Bottom'];
   var LINES = [], LINES_AT = [], ORDER = [];
   var SMALL_LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
   var SUB = [], SUB_OF = [], POS_IN = [];
@@ -291,10 +328,44 @@ legend {
     scores: { computer: { X: 0, O: 0, D: 0 }, friend: { X: 0, O: 0, D: 0 } }
   };
 
+  function cellCount(n) { return n === CUBE ? 27 : n * n; }
+
   function emptyBoard(n) {
     var b = [];
-    for (var i = 0; i < n * n; i++) b.push('');
+    for (var i = 0; i < cellCount(n); i++) b.push('');
     return b;
+  }
+
+  // The 3D cube is 2-player for now, so it plays as "a friend" without changing the saved preference.
+  function opponent() { return s.size === CUBE ? 'friend' : s.opponent; }
+
+  // Cube cell = layer*9 + row*3 + col. Lines run along the 13 directions (3 axes, 6 face diagonals,
+  // 4 space diagonals): 49 lines in all, 13 of them through the centre.
+  function buildCubeLines() {
+    var dirs = [];
+    for (var dl = -1; dl <= 1; dl++) {
+      for (var dr = -1; dr <= 1; dr++) {
+        for (var dc = -1; dc <= 1; dc++) {
+          if ((dl || dr || dc) > 0) dirs.push([dl, dr, dc]); // one of each opposite pair
+        }
+      }
+    }
+    function inside(v) { return v >= 0 && v <= 2; }
+    LINES = [];
+    for (var i = 0; i < 27; i++) {
+      var l = Math.floor(i / 9), r = Math.floor(i / 3) % 3, c = i % 3;
+      dirs.forEach(function (d) {
+        if (!inside(l + 2 * d[0]) || !inside(r + 2 * d[1]) || !inside(c + 2 * d[2])) return;
+        LINES.push([0, 1, 2].map(function (j) { return (l + j * d[0]) * 9 + (r + j * d[1]) * 3 + c + j * d[2]; }));
+      });
+    }
+    LINES_AT = [];
+    ORDER = [];
+    for (var k = 0; k < 27; k++) {
+      LINES_AT.push(LINES.filter(function (line) { return line.indexOf(k) !== -1; }));
+      ORDER.push(k);
+    }
+    ORDER.sort(function (a, b) { return LINES_AT[b].length - LINES_AT[a].length; }); // centre, corners, ...
   }
 
   // Every run of k cells in a row, column or diagonal of an n×n board; plus, per cell, the runs through it,
@@ -400,7 +471,7 @@ legend {
   }
 
   function other(m) { return m === 'X' ? 'O' : 'X'; }
-  function computersTurn() { return s.opponent === 'computer' && s.turn === 'O' && !result(s.board); }
+  function computersTurn() { return opponent() === 'computer' && s.turn === 'O' && !result(s.board); }
 
   // Minimax from O's point of view: +1 O wins, -1 X wins, 0 draw.
   function minimax(b, turn) {
@@ -553,7 +624,7 @@ legend {
     s.last = i;
     var r = result(s.board);
     if (r) {
-      s.scores[s.opponent][r.mark]++;
+      s.scores[opponent()][r.mark]++;
       save();
     } else {
       s.turn = other(s.turn);
@@ -590,9 +661,9 @@ legend {
   }
 
   function render(animate) {
-    var r = result(s.board), vsComputer = s.opponent === 'computer', n = s.size, ultimate = n === ULTIMATE;
-    var legal = r || computersTurn() ? [] : legalMoves(s.board, s.last);
-    var big = ultimate ? subStates(s.board) : [];
+    var vsComputer = opponent() === 'computer', n = s.size, ultimate = n === ULTIMATE, cube = n === CUBE;
+    var r = result(s.board), legal = r || computersTurn() ? [] : legalMoves(s.board, s.last);
+    var big = ultimate ? subStates(s.board) : [], side = cube ? 3 : n;
 
     cells.forEach(function (cell, i) {
       var m = s.board[i];
@@ -601,13 +672,18 @@ legend {
         cell.innerHTML = m ? '<svg viewBox="0 0 100 100" class="mark-' + m + (animate ? ' draw' : '') + '" style="transform:rotate(' + ((i * 37) % 9 - 4) + 'deg)">' + MARKS[m] + '</svg>' : '';
       }
       cell.setAttribute('aria-disabled', legal.indexOf(i) === -1 ? 'true' : 'false');
-      cell.setAttribute('aria-label', 'Row ' + (Math.floor(i / n) + 1) + ', column ' + (i % n + 1) + ', ' + (m || 'empty'));
+      cell.setAttribute('aria-label', (cube ? LAYER_NAMES[Math.floor(i / 9)] + ' layer, row ' : 'Row ') +
+        (Math.floor(i / side) % side + 1) + ', column ' + (i % side + 1) + ', ' + (m || 'empty'));
       cell.classList.toggle('dim', ultimate && (big[SUB_OF[i]] === 'X' || big[SUB_OF[i]] === 'O'));
+      cell.classList.toggle('won', cube && !!r && !!r.line && r.line.indexOf(i) !== -1);
     });
 
     if (ultimate) renderBoards(big, r, animate);
+    if (cube && cubeView) cubeView.update({ board: s.board, legal: legal, turn: s.turn, line: r && r.line, winner: r && r.mark });
+    $('opp-computer').disabled = cube;
+    document.querySelectorAll('input[name="opponent"]').forEach(function (el) { el.checked = el.value === opponent(); });
 
-    var key = r && r.line ? r.line.join(',') : '';
+    var key = r && r.line && !cube ? r.line.join(',') : ''; // the cube shows its win in 3D and on the layer map
     if (winEl.dataset.key !== key) {
       winEl.dataset.key = key;
       if (key) {
@@ -629,7 +705,7 @@ legend {
     statusEl.textContent = text;
     statusEl.dataset.mark = mark;
 
-    var sc = s.scores[s.opponent];
+    var sc = s.scores[opponent()];
     ['X', 'D', 'O'].forEach(function (k) {
       $('num-' + k).textContent = sc[k];
       $('tally-' + k).innerHTML = tally(sc[k]);
@@ -639,7 +715,8 @@ legend {
     $('level-set').hidden = !vsComputer;
     $('lvl-hard-label').textContent = n === 3 ? 'Unbeatable' : 'Hard';
     $('new-round').classList.toggle('primary', !!r);
-    var rules = ultimate ? 'Win 3 small boards in a row. The square you pick sends your opponent to the matching small board (shaded); if that board is finished, they may play in any open one. '
+    var rules = cube ? 'Get 3 in a row in any direction: along a layer, down through the layers, or corner to corner through the centre. Drag the cube to turn it and use Spread to see inside, or play on the layer map. The 3D cube is 2-player for now. '
+      : ultimate ? 'Win 3 small boards in a row. The square you pick sends your opponent to the matching small board (shaded); if that board is finished, they may play in any open one. '
       : n > 3 ? 'Get ' + WIN_LENGTH[n] + ' in a row to win. ' : '';
     $('note').textContent = (vsComputer ? 'You play X. ' : 'Pass the device between turns. ') + rules +
       'The first move swaps sides after every finished round.';
@@ -660,26 +737,47 @@ legend {
     }).join('');
   }
 
-  // Lays out an n×n board (Ultimate: 9×9): the cell buttons, the pencilled grid lines, and the win-line tables.
+  // Lays out an n×n board (Ultimate: 9×9; cube: three 3×3 layers beside the 3D view): the cell buttons,
+  // the pencilled grid lines, and the win-line tables.
   function setupBoard(n) {
+    var cube = n === CUBE;
     s.size = n;
     if (n === ULTIMATE) buildUltimate();
+    else if (cube) buildCubeLines();
     else buildLines(n, WIN_LENGTH[n]);
     boardEl.style.setProperty('--n', n);
+    boardEl.classList.toggle('layers', cube);
+    $('board-wrap').classList.toggle('layers', cube);
+    $('cube-wrap').hidden = !cube;
     boardEl.innerHTML = '';
     cells = [];
-    for (var i = 0; i < n * n; i++) {
+    if (cube) {
+      LAYER_NAMES.forEach(function (name, layer) {
+        var h = document.createElement('div');
+        h.className = 'layer-name';
+        h.textContent = name;
+        h.style.gridColumn = (layer * 4 + 1) + ' / span 3';
+        boardEl.appendChild(h);
+      });
+    }
+    for (var i = 0; i < cellCount(n); i++) {
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'cell';
       b.id = 'cell-' + i;
       b.dataset.index = i;
       b.dataset.mark = '';
+      if (cube) { // layers side by side, with a spacer column between them
+        b.style.gridColumn = Math.floor(i / 9) * 4 + i % 3 + 1;
+        b.style.gridRow = Math.floor(i / 3) % 3 + 2;
+      }
       boardEl.appendChild(b);
       cells.push(b);
     }
+    if (cube) openCubeView();
+    else closeCubeView();
     var grid = '';
-    for (var k = 1; k < n; k++) {
+    for (var k = 1; k < n && !cube; k++) {
       var p = Math.round(300 * k / n), d = k % 2 ? 3 : -3; // alternate the wobble so lines don't look ruled
       var cls = n === ULTIMATE && k % 3 ? ' class="thin"' : ''; // Ultimate: heavy lines only between small boards
       grid += '<path' + cls + ' d="M' + p + ' 8 C ' + (p - d) + ' 100, ' + (p + d) + ' 200, ' + p + ' 292"/>';
@@ -691,6 +789,223 @@ legend {
     $('boards').innerHTML = '';
     $('bigmarks').innerHTML = '';
     $('bigmarks').dataset.key = '';
+  }
+
+  // ---- 3D cube view: three.js is fetched from the CDN the first time the cube is chosen ----
+  var THREE_URL = 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+  var threeLoading = null, cubeView = null;
+
+  function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function openCubeView() {
+    if (cubeView) return;
+    var msg = $('cube-msg');
+    msg.textContent = 'Loading 3D view…';
+    msg.hidden = false;
+    threeLoading = threeLoading || import(THREE_URL);
+    threeLoading.then(function (THREE) {
+      if (s.size !== CUBE || cubeView) return;
+      msg.hidden = true;
+      cubeView = createCubeView(THREE, $('cube-view'), function (i) { if (canPlay(i)) place(i); });
+      cubeView.setSpread(+$('spread').value);
+      render(false);
+    }, function () {
+      threeLoading = null;
+      msg.textContent = "The 3D view couldn't load (are you offline?). You can still play on the layer map below.";
+    });
+  }
+
+  function closeCubeView() {
+    if (cubeView) cubeView.dispose();
+    cubeView = null;
+  }
+
+  // Cell i sits at its layer (top to bottom), row (back to front) and column (left to right). Each cell is a
+  // see-through cubelet with a hand-drawn mark inside that always faces the viewer. Dragging turns the cube;
+  // a press that barely moves is a click, which picks the nearest playable cubelet under the pointer.
+  function createCubeView(THREE, host, onPick) {
+    var renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    var el = renderer.domElement;
+    host.appendChild(el);
+    var scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
+    var cube = new THREE.Group();
+    scene.add(cube);
+
+    var HOME = { x: 0.5, y: -0.6 }, view = { x: HOME.x, y: HOME.y };
+    var spread = 1.5, state = null, hover = -1, frame = 0, colors = {}, textures = {};
+    var boxGeo = new THREE.BoxGeometry(0.8, 0.8, 0.8), edgeGeo = new THREE.EdgesGeometry(boxGeo);
+    var units = [];
+    for (var i = 0; i < 27; i++) {
+      var box = new THREE.Mesh(boxGeo, new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }));
+      var edges = new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({ transparent: true }));
+      var sprite = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false }));
+      box.userData.index = i;
+      sprite.scale.set(0.7, 0.7, 1);
+      sprite.visible = false;
+      var unit = new THREE.Group();
+      unit.add(box, edges, sprite);
+      cube.add(unit);
+      units.push({ group: unit, box: box, edges: edges, sprite: sprite });
+    }
+    var winBar = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1, 12), new THREE.MeshBasicMaterial());
+    winBar.visible = false;
+    cube.add(winBar);
+
+    // Colours come from the page's CSS tokens; marks are the same hand-drawn paths, drawn onto canvases.
+    function loadTheme() {
+      colors = { X: cssVar('--x'), O: cssVar('--o'), pencil: cssVar('--pencil') };
+      ['X', 'O'].forEach(function (m) {
+        var img = new Image();
+        img.onload = function () {
+          var c = document.createElement('canvas');
+          c.width = c.height = 256;
+          c.getContext('2d').drawImage(img, 0, 0, 256, 256);
+          if (textures[m]) textures[m].dispose();
+          textures[m] = new THREE.CanvasTexture(c);
+          textures[m].colorSpace = THREE.SRGBColorSpace;
+          paint();
+        };
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">' +
+          '<g fill="none" stroke="' + colors[m] + '" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">' + MARKS[m] + '</g></svg>');
+      });
+      paint();
+    }
+
+    function layout() {
+      units.forEach(function (u, i) {
+        u.group.position.set((i % 3 - 1) * spread, (1 - Math.floor(i / 9)) * spread, (Math.floor(i / 3) % 3 - 1) * spread);
+      });
+      camera.position.set(0, 0, (spread + 0.45) * 6.6); // far enough that every corner stays in view at any angle
+      camera.updateProjectionMatrix();
+      placeWinBar();
+      draw();
+    }
+
+    function placeWinBar() {
+      var line = state && state.line;
+      winBar.visible = !!line;
+      if (!line) return;
+      var a = units[line[0]].group.position, b = units[line[2]].group.position;
+      var dir = new THREE.Vector3().subVectors(b, a), len = dir.length();
+      winBar.position.copy(a).add(b).multiplyScalar(0.5);
+      winBar.scale.set(1, len + 0.9, 1);
+      winBar.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+      winBar.material.color.set(colors[state.winner]);
+    }
+
+    function paint() {
+      if (!state) return;
+      units.forEach(function (u, i) {
+        var m = state.board[i], won = !!state.line && state.line.indexOf(i) !== -1, over = i === hover;
+        u.box.material.color.set(won ? colors[state.winner] : over ? colors[state.turn] : colors.pencil);
+        u.box.material.opacity = won ? 0.35 : over ? 0.3 : m ? 0.1 : 0.05;
+        u.edges.material.color.set(won ? colors[state.winner] : colors.pencil);
+        u.edges.material.opacity = won ? 0.9 : 0.35;
+        u.sprite.visible = !!m && !!textures[m];
+        if (u.sprite.visible && u.sprite.material.map !== textures[m]) {
+          u.sprite.material.map = textures[m];
+          u.sprite.material.needsUpdate = true;
+        }
+      });
+      placeWinBar();
+      draw();
+    }
+
+    function draw() {
+      if (frame) return;
+      frame = requestAnimationFrame(function () {
+        frame = 0;
+        cube.rotation.set(view.x, view.y, 0);
+        renderer.render(scene, camera);
+      });
+    }
+
+    var resize = new ResizeObserver(function () {
+      var w = host.clientWidth;
+      if (!w) return;
+      renderer.setSize(w, w, false);
+      draw();
+    });
+    resize.observe(host);
+
+    var ray = new THREE.Raycaster(), pointer = new THREE.Vector2(), down = null;
+    function cellAt(e) {
+      if (!state) return -1;
+      var r = el.getBoundingClientRect();
+      pointer.set((e.clientX - r.left) / r.width * 2 - 1, 1 - (e.clientY - r.top) / r.height * 2);
+      ray.setFromCamera(pointer, camera);
+      var hits = ray.intersectObjects(units.map(function (u) { return u.box; }), false);
+      for (var h = 0; h < hits.length; h++) {
+        var i = hits[h].object.userData.index;
+        if (state.legal.indexOf(i) !== -1) return i;
+      }
+      return -1;
+    }
+    function setHover(i) {
+      if (i === hover) return;
+      hover = i;
+      host.classList.toggle('over', i >= 0);
+      paint();
+    }
+    el.addEventListener('pointerdown', function (e) {
+      down = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false };
+      el.setPointerCapture(e.pointerId);
+    });
+    el.addEventListener('pointermove', function (e) {
+      if (!down) { setHover(cellAt(e)); return; }
+      var dx = e.clientX - down.x, dy = e.clientY - down.y;
+      if (!down.moved && Math.hypot(dx, dy) < 5) return;
+      down.moved = true;
+      host.classList.add('dragging');
+      setHover(-1);
+      view.y = down.vy + dx * 0.01;
+      view.x = Math.max(-1.3, Math.min(1.3, down.vx + dy * 0.01));
+      draw();
+    });
+    el.addEventListener('pointerup', function (e) {
+      if (!down) return;
+      var click = !down.moved;
+      down = null;
+      host.classList.remove('dragging');
+      if (click) {
+        var i = cellAt(e);
+        if (i >= 0) onPick(i);
+      }
+    });
+    el.addEventListener('pointercancel', function () { down = null; host.classList.remove('dragging'); });
+    el.addEventListener('pointerleave', function () { if (!down) setHover(-1); });
+
+    var dark = window.matchMedia('(prefers-color-scheme: dark)'), themeAttr = new MutationObserver(loadTheme);
+    dark.addEventListener('change', loadTheme);
+    themeAttr.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    loadTheme();
+    layout();
+
+    return {
+      update: function (next) {
+        state = next;
+        if (state.legal.indexOf(hover) === -1) setHover(-1);
+        paint();
+      },
+      setSpread: function (v) { spread = v; layout(); },
+      resetView: function () { view.x = HOME.x; view.y = HOME.y; draw(); },
+      dispose: function () {
+        cancelAnimationFrame(frame);
+        resize.disconnect();
+        themeAttr.disconnect();
+        dark.removeEventListener('change', loadTheme);
+        units.forEach(function (u) { u.box.material.dispose(); u.edges.material.dispose(); u.sprite.material.dispose(); });
+        boxGeo.dispose();
+        edgeGeo.dispose();
+        winBar.geometry.dispose();
+        winBar.material.dispose();
+        Object.keys(textures).forEach(function (m) { textures[m].dispose(); });
+        renderer.dispose();
+        el.remove();
+        host.classList.remove('over', 'dragging');
+      }
+    };
   }
 
   function resetGame() {
@@ -725,7 +1040,7 @@ legend {
     load();
     if (data && WIN_LENGTH[data.size]) s.size = data.size;
     s.board = emptyBoard(s.size);
-    if (data && Array.isArray(data.board) && data.board.length === s.size * s.size) {
+    if (data && Array.isArray(data.board) && data.board.length === cellCount(s.size)) {
       s.board = data.board.map(function (m) { return m === 'X' || m === 'O' ? m : ''; });
       if (Number.isInteger(data.last) && data.last >= 0 && data.last < s.board.length && s.board[data.last]) s.last = data.last;
       if (data.turn === 'X' || data.turn === 'O') s.turn = data.turn;
@@ -745,19 +1060,29 @@ legend {
     boardEl.addEventListener('keydown', function (e) {
       var cell = e.target.closest('.cell');
       if (!cell) return;
-      var n = s.size, i = +cell.dataset.index, row = Math.floor(i / n), col = i % n;
+      // The cube is three 3×3 layers: arrows move within a layer, Page Up / Page Down switch layers.
+      var layers = s.size === CUBE ? 3 : 1, n = s.size === CUBE ? 3 : s.size, i = +cell.dataset.index;
+      var layer = Math.floor(i / (n * n)), row = Math.floor(i / n) % n, col = i % n;
       if (e.key === 'ArrowLeft') col = (col + n - 1) % n;
       else if (e.key === 'ArrowRight') col = (col + 1) % n;
       else if (e.key === 'ArrowUp') row = (row + n - 1) % n;
       else if (e.key === 'ArrowDown') row = (row + 1) % n;
+      else if (e.key === 'PageUp' && layers > 1) layer = (layer + layers - 1) % layers;
+      else if (e.key === 'PageDown' && layers > 1) layer = (layer + 1) % layers;
       else return;
       e.preventDefault();
-      cells[row * n + col].focus();
+      cells[layer * n * n + row * n + col].focus();
+    });
+
+    $('spread').addEventListener('input', function () { if (cubeView) cubeView.setSpread(+this.value); });
+    $('reset-view').addEventListener('click', function () {
+      $('spread').value = 1.5;
+      if (cubeView) { cubeView.setSpread(1.5); cubeView.resetView(); }
     });
 
     $('new-round').addEventListener('click', newRound);
     $('clear-scores').addEventListener('click', function () {
-      s.scores[s.opponent] = { X: 0, O: 0, D: 0 };
+      s.scores[opponent()] = { X: 0, O: 0, D: 0 };
       save();
       render(true);
     });

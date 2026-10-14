@@ -7,6 +7,7 @@ A single-page tic-tac-toe game styled like a sketch on graph paper (with a black
 - Play against the computer (Easy or Hard) or a friend on the same device
 - Board sizes 3×3 (3 in a row), 4×4 and 5×5 (4 in a row)
 - Ultimate Tic-Tac-Toe: nine small boards; the square you pick sends your opponent to the matching small board, and three won boards in a row win the game
+- 3D Tic-Tac-Toe (2-player): a 3×3×3 cube you drag to rotate (three.js, loaded from a CDN only when chosen), with a Spread slider to see inside and a flat Top / Middle / Bottom layer map that also works with the keyboard (arrows, Page Up / Page Down). Three in a row in any direction wins — 49 lines in all
 - On 3×3 the Hard computer is unbeatable (full minimax); on bigger boards and Ultimate it looks ahead with alpha-beta search for ~0.3s per move
 - Scores and settings are saved in the browser
 
