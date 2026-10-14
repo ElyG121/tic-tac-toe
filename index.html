@@ -118,6 +118,11 @@ h1 .o { color: var(--o); }
 .cell svg { width: 100%; height: 100%; display: block; overflow: visible; }
 .lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 .lines .grid path { stroke: var(--pencil); stroke-width: 4; fill: none; stroke-linecap: round; }
+/* Ultimate: faint lines inside each small board, a tint on the board you must play in, big marks on won boards. */
+.lines .grid path.thin { stroke-width: 1.5; opacity: 0.5; }
+.lines .live { fill: var(--hover); }
+.lines .big .stroke { stroke-width: 9; }
+.cell.dim svg { opacity: 0.3; }
 .stroke {
   fill: none;
   stroke-width: 8;
@@ -211,7 +216,9 @@ legend {
 
   <div class="board-wrap">
     <svg class="lines" viewBox="0 0 300 300" aria-hidden="true">
+      <g id="boards"></g>
       <g class="grid" id="grid"></g>
+      <g id="bigmarks"></g>
       <g id="winline"></g>
     </svg>
     <div class="board" id="board" role="group" aria-label="Game board"></div>
@@ -242,6 +249,7 @@ legend {
         <input type="radio" name="size" id="size-3" value="3" checked><label for="size-3">3&#215;3</label>
         <input type="radio" name="size" id="size-4" value="4"><label for="size-4">4&#215;4</label>
         <input type="radio" name="size" id="size-5" value="5"><label for="size-5">5&#215;5</label>
+        <input type="radio" name="size" id="size-9" value="9"><label for="size-9">Ultimate</label>
       </div>
     </fieldset>
     <fieldset id="level-set">
@@ -258,8 +266,11 @@ legend {
 
 <script>
 (function () {
-  var WIN_LENGTH = { 3: 3, 4: 4, 5: 4 }; // marks in a row needed to win on each board size
+  var WIN_LENGTH = { 3: 3, 4: 4, 5: 4, 9: 3 }; // marks (Ultimate: small boards) in a row needed to win per size
+  var ULTIMATE = 9; // Ultimate is stored as a 9×9 board
   var LINES = [], LINES_AT = [], ORDER = [];
+  var SMALL_LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  var SUB = [], SUB_OF = [], POS_IN = [];
   var MARKS = {
     X: '<path class="stroke" pathLength="1" d="M23 21 C 40 41, 61 60, 78 80"/><path class="stroke" pathLength="1" d="M78 20 C 61 42, 40 59, 22 81"/>',
     O: '<path class="stroke" pathLength="1" d="M53 19 C 31 16, 17 35, 19 54 C 21 74, 39 85, 56 81 C 75 77, 85 58, 81 40 C 77 26, 65 17, 47 21"/>'
@@ -272,6 +283,7 @@ legend {
   var s = {
     size: 3,
     board: emptyBoard(3),
+    last: -1, // the latest move; in Ultimate it decides which small board is played next
     turn: 'X',
     starter: 'X',
     opponent: 'computer',
@@ -312,12 +324,75 @@ legend {
     ORDER.sort(function (a, b) { return dist(a) - dist(b); });
   }
 
+  // Ultimate keeps its 81 cells row by row as on screen. Small boards (k) and the positions inside one are both
+  // numbered 0–8 row by row: SUB[k] lists board k's cells, SUB_OF[g] and POS_IN[g] locate cell g.
+  function buildUltimate() {
+    SUB = [[], [], [], [], [], [], [], [], []];
+    SUB_OF = [];
+    POS_IN = [];
+    ORDER = [];
+    for (var g = 0; g < 81; g++) {
+      var r = Math.floor(g / 9), c = g % 9, k = Math.floor(r / 3) * 3 + Math.floor(c / 3);
+      SUB_OF.push(k);
+      POS_IN.push(r % 3 * 3 + c % 3);
+      SUB[k][POS_IN[g]] = g;
+      ORDER.push(g);
+    }
+    var rank = [1, 2, 1, 2, 0, 2, 1, 2, 1]; // search centres first, then corners, then edges
+    ORDER.sort(function (a, b) { return rank[POS_IN[a]] - rank[POS_IN[b]]; });
+  }
+
+  // 'X' or 'O' if that player won small board k, 'D' if it filled up without a winner, '' while still open.
+  function subState(b, k) {
+    var cs = SUB[k];
+    for (var i = 0; i < 8; i++) {
+      var l = SMALL_LINES[i], m = b[cs[l[0]]];
+      if (m && b[cs[l[1]]] === m && b[cs[l[2]]] === m) return m;
+    }
+    for (var j = 0; j < 9; j++) if (!b[cs[j]]) return '';
+    return 'D';
+  }
+
+  function subStates(b) {
+    var big = [];
+    for (var k = 0; k < 9; k++) big.push(subState(b, k));
+    return big;
+  }
+
+  // The small board the next player is sent to, or -1 when they may pick any open board.
+  function forcedBoard(last, big) {
+    if (last < 0) return -1;
+    var k = POS_IN[last];
+    return big[k] ? -1 : k;
+  }
+
+  function ultimateMoves(b, last) {
+    var big = subStates(b), k = forcedBoard(last, big);
+    return ORDER.filter(function (g) { return !b[g] && (k >= 0 ? SUB_OF[g] === k : !big[SUB_OF[g]]); });
+  }
+
+  // The line in an Ultimate result is the three small boards that won.
+  function ultimateResult(b) {
+    var big = subStates(b);
+    for (var i = 0; i < 8; i++) {
+      var l = SMALL_LINES[i], m = big[l[0]];
+      if ((m === 'X' || m === 'O') && big[l[1]] === m && big[l[2]] === m) return { mark: m, line: l };
+    }
+    return big.indexOf('') === -1 ? { mark: 'D', line: null } : null;
+  }
+
+  function legalMoves(b, last) {
+    if (s.size === ULTIMATE) return ultimateMoves(b, last);
+    return ORDER.filter(function (c) { return !b[c]; });
+  }
+
   function complete(b, l) {
     for (var j = 1; j < l.length; j++) if (b[l[j]] !== b[l[0]]) return false;
     return !!b[l[0]];
   }
 
   function result(b) {
+    if (s.size === ULTIMATE) return ultimateResult(b);
     for (var i = 0; i < LINES.length; i++) {
       if (complete(b, LINES[i])) return { mark: b[LINES[i][0]], line: LINES[i] };
     }
@@ -342,11 +417,49 @@ legend {
     return best;
   }
 
-  // 4×4 and 5×5 are too big to search to the end, so look ahead as far as a time budget allows (alpha-beta)
-  // and score unfinished positions by open lines: 10^count for each line only one side has marks in, O positive.
+  // 4×4, 5×5 and Ultimate are too big to search to the end, so look ahead as far as a time budget allows
+  // (alpha-beta) and score unfinished positions by open lines: 10^count for each line only one side has marks in,
+  // O positive.
   var BIG = 1e7, THINK_MS = 300, TIMEOUT = {};
 
-  function evaluate(b) {
+  // Ultimate: won small boards and open lines of them on the big board count most, then two-in-a-rows inside
+  // open small boards; sending the opponent to a finished board (a free choice) is a small gift to them.
+  function evaluateUltimate(b, last, turn) {
+    var big = subStates(b), score = 0;
+    for (var k = 0; k < 9; k++) {
+      if (big[k] === 'O') score += 100;
+      else if (big[k] === 'X') score -= 100;
+      else if (!big[k]) {
+        for (var i = 0; i < 8; i++) {
+          var l = SMALL_LINES[i], o = 0, x = 0;
+          for (var j = 0; j < 3; j++) {
+            var m = b[SUB[k][l[j]]];
+            if (m === 'O') o++;
+            else if (m === 'X') x++;
+          }
+          if (o && !x) score += o === 2 ? 6 : 1;
+          else if (x && !o) score -= x === 2 ? 6 : 1;
+        }
+      }
+    }
+    for (var n = 0; n < 8; n++) {
+      var line = SMALL_LINES[n], bo = 0, bx = 0, dead = false;
+      for (var t = 0; t < 3; t++) {
+        var st = big[line[t]];
+        if (st === 'O') bo++;
+        else if (st === 'X') bx++;
+        else if (st === 'D') dead = true;
+      }
+      if (dead || (bo && bx)) continue;
+      if (bo) score += bo === 2 ? 300 : 30;
+      else if (bx) score -= bx === 2 ? 300 : 30;
+    }
+    if (forcedBoard(last, big) < 0) score += turn === 'O' ? 20 : -20;
+    return score;
+  }
+
+  function evaluate(b, last, turn) {
+    if (s.size === ULTIMATE) return evaluateUltimate(b, last, turn);
     var score = 0;
     for (var i = 0; i < LINES.length; i++) {
       var l = LINES[i], o = 0, x = 0;
@@ -360,17 +473,25 @@ legend {
     return score;
   }
 
-  function search(b, turn, depth, alpha, beta, last, deadline) {
-    var at = LINES_AT[last];
-    for (var i = 0; i < at.length; i++) {
-      if (complete(b, at[i])) return b[last] === 'O' ? BIG + depth : -BIG - depth; // sooner wins score higher
+  // Did the move at `last` win the game?
+  function wonBy(b, last) {
+    if (s.size === ULTIMATE) {
+      var r = ultimateResult(b);
+      return !!r && r.mark !== 'D';
     }
-    if (b.indexOf('') === -1) return 0;
-    if (depth === 0) return evaluate(b);
+    var at = LINES_AT[last];
+    for (var i = 0; i < at.length; i++) if (complete(b, at[i])) return true;
+    return false;
+  }
+
+  function search(b, turn, depth, alpha, beta, last, deadline) {
+    if (wonBy(b, last)) return b[last] === 'O' ? BIG + depth : -BIG - depth; // sooner wins score higher
+    var moves = legalMoves(b, last);
+    if (!moves.length) return 0;
+    if (depth === 0) return evaluate(b, last, turn);
     if (Date.now() > deadline) throw TIMEOUT;
-    for (var k = 0; k < ORDER.length && alpha < beta; k++) {
-      var c = ORDER[k];
-      if (b[c]) continue;
+    for (var k = 0; k < moves.length && alpha < beta; k++) {
+      var c = moves[k];
       b[c] = turn;
       var v = search(b, other(turn), depth - 1, alpha, beta, c, deadline);
       b[c] = '';
@@ -409,8 +530,7 @@ legend {
   function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
 
   function computerMove() {
-    var empty = [];
-    for (var i = 0; i < s.board.length; i++) if (!s.board[i]) empty.push(i);
+    var empty = legalMoves(s.board, s.last);
     if (s.level === 'easy' && Math.random() < 0.6) return pick(empty);
     if (s.size > 3) return lookaheadMove(empty);
     var best = -2, moves = [];
@@ -424,8 +544,13 @@ legend {
     return pick(moves);
   }
 
+  function canPlay(i) {
+    return !result(s.board) && !computersTurn() && legalMoves(s.board, s.last).indexOf(i) !== -1;
+  }
+
   function place(i) {
     s.board[i] = s.turn;
+    s.last = i;
     var r = result(s.board);
     if (r) {
       s.scores[s.opponent][r.mark]++;
@@ -446,6 +571,7 @@ legend {
     clearTimeout(timer);
     if (result(s.board)) s.starter = other(s.starter);
     s.board = emptyBoard(s.size);
+    s.last = -1;
     s.turn = s.starter;
     render(true);
     queueComputer();
@@ -464,7 +590,9 @@ legend {
   }
 
   function render(animate) {
-    var r = result(s.board), vsComputer = s.opponent === 'computer', n = s.size;
+    var r = result(s.board), vsComputer = s.opponent === 'computer', n = s.size, ultimate = n === ULTIMATE;
+    var legal = r || computersTurn() ? [] : legalMoves(s.board, s.last);
+    var big = ultimate ? subStates(s.board) : [];
 
     cells.forEach(function (cell, i) {
       var m = s.board[i];
@@ -472,18 +600,21 @@ legend {
         cell.dataset.mark = m;
         cell.innerHTML = m ? '<svg viewBox="0 0 100 100" class="mark-' + m + (animate ? ' draw' : '') + '" style="transform:rotate(' + ((i * 37) % 9 - 4) + 'deg)">' + MARKS[m] + '</svg>' : '';
       }
-      var blocked = !!m || !!r || computersTurn();
-      cell.setAttribute('aria-disabled', blocked ? 'true' : 'false');
+      cell.setAttribute('aria-disabled', legal.indexOf(i) === -1 ? 'true' : 'false');
       cell.setAttribute('aria-label', 'Row ' + (Math.floor(i / n) + 1) + ', column ' + (i % n + 1) + ', ' + (m || 'empty'));
+      cell.classList.toggle('dim', ultimate && (big[SUB_OF[i]] === 'X' || big[SUB_OF[i]] === 'O'));
     });
+
+    if (ultimate) renderBoards(big, r, animate);
 
     var key = r && r.line ? r.line.join(',') : '';
     if (winEl.dataset.key !== key) {
       winEl.dataset.key = key;
       if (key) {
-        var a = r.line[0], c = r.line[r.line.length - 1], w = 300 / n;
-        var x1 = (a % n + 0.5) * w, y1 = (Math.floor(a / n) + 0.5) * w;
-        var x2 = (c % n + 0.5) * w, y2 = (Math.floor(c / n) + 0.5) * w;
+        var g = ultimate ? 3 : n; // an Ultimate win line runs across small boards
+        var a = r.line[0], c = r.line[r.line.length - 1], w = 300 / g;
+        var x1 = (a % g + 0.5) * w, y1 = (Math.floor(a / g) + 0.5) * w;
+        var x2 = (c % g + 0.5) * w, y2 = (Math.floor(c / g) + 0.5) * w;
         var len = Math.hypot(x2 - x1, y2 - y1), ux = (x2 - x1) / len * w * 0.34, uy = (y2 - y1) / len * w * 0.34;
         winEl.innerHTML = '<path class="stroke win win-' + r.mark + (animate ? ' draw' : '') + '" pathLength="1" d="M' + (x1 - ux) + ' ' + (y1 - uy + 2) + ' L' + (x2 + ux) + ' ' + (y2 + uy - 2) + '"/>';
       } else {
@@ -508,14 +639,32 @@ legend {
     $('level-set').hidden = !vsComputer;
     $('lvl-hard-label').textContent = n === 3 ? 'Unbeatable' : 'Hard';
     $('new-round').classList.toggle('primary', !!r);
-    $('note').textContent = (vsComputer ? 'You play X. ' : 'Pass the device between turns. ') +
-      (n > 3 ? 'Get ' + WIN_LENGTH[n] + ' in a row to win. ' : '') + 'The first move swaps sides after every finished round.';
+    var rules = ultimate ? 'Win 3 small boards in a row. The square you pick sends your opponent to the matching small board (shaded); if that board is finished, they may play in any open one. '
+      : n > 3 ? 'Get ' + WIN_LENGTH[n] + ' in a row to win. ' : '';
+    $('note').textContent = (vsComputer ? 'You play X. ' : 'Pass the device between turns. ') + rules +
+      'The first move swaps sides after every finished round.';
   }
 
-  // Lays out an n×n board: the cell buttons, the pencilled grid lines, and the win-line tables.
+  // Ultimate overlays: a tint on the small board the player is sent to, and a big mark on each won small board.
+  function renderBoards(big, r, animate) {
+    var k = r ? -1 : forcedBoard(s.last, big);
+    $('boards').innerHTML = k < 0 ? '' :
+      '<rect class="live" x="' + (k % 3 * 100 + 4) + '" y="' + (Math.floor(k / 3) * 100 + 4) + '" width="92" height="92" rx="6"/>';
+    var key = big.join(','), before = (($('bigmarks').dataset.key || '').split(','));
+    if ($('bigmarks').dataset.key === key) return;
+    $('bigmarks').dataset.key = key;
+    $('bigmarks').innerHTML = big.map(function (m, j) {
+      if (m !== 'X' && m !== 'O') return '';
+      var fresh = animate && before[j] !== m;
+      return '<g class="big mark-' + m + (fresh ? ' draw' : '') + '" transform="translate(' + (j % 3 * 100) + ' ' + Math.floor(j / 3) * 100 + ')">' + MARKS[m] + '</g>';
+    }).join('');
+  }
+
+  // Lays out an n×n board (Ultimate: 9×9): the cell buttons, the pencilled grid lines, and the win-line tables.
   function setupBoard(n) {
     s.size = n;
-    buildLines(n, WIN_LENGTH[n]);
+    if (n === ULTIMATE) buildUltimate();
+    else buildLines(n, WIN_LENGTH[n]);
     boardEl.style.setProperty('--n', n);
     boardEl.innerHTML = '';
     cells = [];
@@ -532,12 +681,16 @@ legend {
     var grid = '';
     for (var k = 1; k < n; k++) {
       var p = Math.round(300 * k / n), d = k % 2 ? 3 : -3; // alternate the wobble so lines don't look ruled
-      grid += '<path d="M' + p + ' 8 C ' + (p - d) + ' 100, ' + (p + d) + ' 200, ' + p + ' 292"/>';
-      grid += '<path d="M8 ' + p + ' C 100 ' + (p + d) + ', 200 ' + (p - d) + ', 292 ' + p + '"/>';
+      var cls = n === ULTIMATE && k % 3 ? ' class="thin"' : ''; // Ultimate: heavy lines only between small boards
+      grid += '<path' + cls + ' d="M' + p + ' 8 C ' + (p - d) + ' 100, ' + (p + d) + ' 200, ' + p + ' 292"/>';
+      grid += '<path' + cls + ' d="M8 ' + p + ' C 100 ' + (p + d) + ', 200 ' + (p - d) + ', 292 ' + p + '"/>';
     }
     $('grid').innerHTML = grid;
     winEl.innerHTML = '';
     winEl.dataset.key = '';
+    $('boards').innerHTML = '';
+    $('bigmarks').innerHTML = '';
+    $('bigmarks').dataset.key = '';
   }
 
   function resetGame() {
@@ -545,6 +698,7 @@ legend {
     s.starter = 'X';
     s.turn = 'X';
     s.board = emptyBoard(s.size);
+    s.last = -1;
     render(true);
   }
 
@@ -573,6 +727,7 @@ legend {
     s.board = emptyBoard(s.size);
     if (data && Array.isArray(data.board) && data.board.length === s.size * s.size) {
       s.board = data.board.map(function (m) { return m === 'X' || m === 'O' ? m : ''; });
+      if (Number.isInteger(data.last) && data.last >= 0 && data.last < s.board.length && s.board[data.last]) s.last = data.last;
       if (data.turn === 'X' || data.turn === 'O') s.turn = data.turn;
       if (data.starter === 'X' || data.starter === 'O') s.starter = data.starter;
       if (data.opponent === 'computer' || data.opponent === 'friend') s.opponent = data.opponent;
@@ -584,8 +739,7 @@ legend {
       var cell = e.target.closest('.cell');
       if (!cell) return;
       var i = +cell.dataset.index;
-      if (s.board[i] || result(s.board) || computersTurn()) return;
-      place(i);
+      if (canPlay(i)) place(i);
     });
 
     boardEl.addEventListener('keydown', function (e) {
@@ -640,7 +794,7 @@ legend {
   var hot = window.claude && window.claude.hot;
   if (hot && hot.snapshot) {
     hot.snapshot(function () {
-      return { size: s.size, board: s.board, turn: s.turn, starter: s.starter, opponent: s.opponent, level: s.level };
+      return { size: s.size, board: s.board, last: s.last, turn: s.turn, starter: s.starter, opponent: s.opponent, level: s.level };
     });
   }
   if (hot && hot.ready) hot.ready(start);
