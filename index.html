@@ -96,8 +96,8 @@ h1 .o { color: var(--o); }
 .board {
   position: absolute; inset: 0;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  grid-template-rows: repeat(3, 1fr);
+  grid-template-columns: repeat(var(--n, 3), 1fr);
+  grid-template-rows: repeat(var(--n, 3), 1fr);
 }
 .cell {
   appearance: none;
@@ -211,12 +211,7 @@ legend {
 
   <div class="board-wrap">
     <svg class="lines" viewBox="0 0 300 300" aria-hidden="true">
-      <g class="grid">
-        <path d="M100 8 C 97 100, 103 200, 100 292"/>
-        <path d="M200 8 C 203 96, 197 204, 201 292"/>
-        <path d="M8 100 C 100 103, 200 97, 292 101"/>
-        <path d="M8 200 C 96 197, 204 203, 292 199"/>
-      </g>
+      <g class="grid" id="grid"></g>
       <g id="winline"></g>
     </svg>
     <div class="board" id="board" role="group" aria-label="Game board"></div>
@@ -241,11 +236,19 @@ legend {
         <input type="radio" name="opponent" id="opp-friend" value="friend"><label for="opp-friend">A friend</label>
       </div>
     </fieldset>
+    <fieldset>
+      <legend>Board size</legend>
+      <div class="seg">
+        <input type="radio" name="size" id="size-3" value="3" checked><label for="size-3">3&#215;3</label>
+        <input type="radio" name="size" id="size-4" value="4"><label for="size-4">4&#215;4</label>
+        <input type="radio" name="size" id="size-5" value="5"><label for="size-5">5&#215;5</label>
+      </div>
+    </fieldset>
     <fieldset id="level-set">
       <legend>Computer skill</legend>
       <div class="seg">
         <input type="radio" name="level" id="lvl-easy" value="easy"><label for="lvl-easy">Easy</label>
-        <input type="radio" name="level" id="lvl-hard" value="hard" checked><label for="lvl-hard">Unbeatable</label>
+        <input type="radio" name="level" id="lvl-hard" value="hard" checked><label for="lvl-hard" id="lvl-hard-label">Unbeatable</label>
       </div>
     </fieldset>
   </div>
@@ -255,7 +258,8 @@ legend {
 
 <script>
 (function () {
-  var LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  var WIN_LENGTH = { 3: 3, 4: 4, 5: 4 }; // marks in a row needed to win on each board size
+  var LINES = [], LINES_AT = [], ORDER = [];
   var MARKS = {
     X: '<path class="stroke" pathLength="1" d="M23 21 C 40 41, 61 60, 78 80"/><path class="stroke" pathLength="1" d="M78 20 C 61 42, 40 59, 22 81"/>',
     O: '<path class="stroke" pathLength="1" d="M53 19 C 31 16, 17 35, 19 54 C 21 74, 39 85, 56 81 C 75 77, 85 58, 81 40 C 77 26, 65 17, 47 21"/>'
@@ -266,7 +270,8 @@ legend {
   var cells = [], timer = null;
 
   var s = {
-    board: ['', '', '', '', '', '', '', '', ''],
+    size: 3,
+    board: emptyBoard(3),
     turn: 'X',
     starter: 'X',
     opponent: 'computer',
@@ -274,10 +279,47 @@ legend {
     scores: { computer: { X: 0, O: 0, D: 0 }, friend: { X: 0, O: 0, D: 0 } }
   };
 
+  function emptyBoard(n) {
+    var b = [];
+    for (var i = 0; i < n * n; i++) b.push('');
+    return b;
+  }
+
+  // Every run of k cells in a row, column or diagonal of an n×n board; plus, per cell, the runs through it,
+  // and the cells ordered centre-first (the search tries central moves first).
+  function buildLines(n, k) {
+    var dirs = [[0, 1], [1, 0], [1, 1], [1, -1]];
+    LINES = [];
+    for (var r = 0; r < n; r++) {
+      for (var c = 0; c < n; c++) {
+        dirs.forEach(function (d) {
+          var er = r + d[0] * (k - 1), ec = c + d[1] * (k - 1);
+          if (er >= n || ec < 0 || ec >= n) return;
+          var line = [];
+          for (var j = 0; j < k; j++) line.push((r + d[0] * j) * n + c + d[1] * j);
+          LINES.push(line);
+        });
+      }
+    }
+    LINES_AT = [];
+    ORDER = [];
+    for (var i = 0; i < n * n; i++) {
+      LINES_AT.push(LINES.filter(function (l) { return l.indexOf(i) !== -1; }));
+      ORDER.push(i);
+    }
+    var mid = (n - 1) / 2;
+    function dist(i) { return Math.abs(Math.floor(i / n) - mid) + Math.abs(i % n - mid); }
+    ORDER.sort(function (a, b) { return dist(a) - dist(b); });
+  }
+
+  function complete(b, l) {
+    for (var j = 1; j < l.length; j++) if (b[l[j]] !== b[l[0]]) return false;
+    return !!b[l[0]];
+  }
+
   function result(b) {
     for (var i = 0; i < LINES.length; i++) {
-      var l = LINES[i];
-      if (b[l[0]] && b[l[0]] === b[l[1]] && b[l[0]] === b[l[2]]) return { mark: b[l[0]], line: l };
+      if (complete(b, LINES[i])) return { mark: b[LINES[i][0]], line: LINES[i] };
     }
     return b.indexOf('') === -1 ? { mark: 'D', line: null } : null;
   }
@@ -290,7 +332,7 @@ legend {
     var r = result(b);
     if (r) return r.mark === 'O' ? 1 : r.mark === 'X' ? -1 : 0;
     var best = turn === 'O' ? -2 : 2;
-    for (var i = 0; i < 9; i++) {
+    for (var i = 0; i < b.length; i++) {
       if (b[i]) continue;
       b[i] = turn;
       var v = minimax(b, other(turn));
@@ -300,12 +342,77 @@ legend {
     return best;
   }
 
+  // 4×4 and 5×5 are too big to search to the end, so look ahead as far as a time budget allows (alpha-beta)
+  // and score unfinished positions by open lines: 10^count for each line only one side has marks in, O positive.
+  var BIG = 1e7, THINK_MS = 300, TIMEOUT = {};
+
+  function evaluate(b) {
+    var score = 0;
+    for (var i = 0; i < LINES.length; i++) {
+      var l = LINES[i], o = 0, x = 0;
+      for (var j = 0; j < l.length; j++) {
+        if (b[l[j]] === 'O') o++;
+        else if (b[l[j]] === 'X') x++;
+      }
+      if (o && !x) score += Math.pow(10, o);
+      else if (x && !o) score -= Math.pow(10, x);
+    }
+    return score;
+  }
+
+  function search(b, turn, depth, alpha, beta, last, deadline) {
+    var at = LINES_AT[last];
+    for (var i = 0; i < at.length; i++) {
+      if (complete(b, at[i])) return b[last] === 'O' ? BIG + depth : -BIG - depth; // sooner wins score higher
+    }
+    if (b.indexOf('') === -1) return 0;
+    if (depth === 0) return evaluate(b);
+    if (Date.now() > deadline) throw TIMEOUT;
+    for (var k = 0; k < ORDER.length && alpha < beta; k++) {
+      var c = ORDER[k];
+      if (b[c]) continue;
+      b[c] = turn;
+      var v = search(b, other(turn), depth - 1, alpha, beta, c, deadline);
+      b[c] = '';
+      if (turn === 'O') alpha = Math.max(alpha, v);
+      else beta = Math.min(beta, v);
+    }
+    return turn === 'O' ? alpha : beta;
+  }
+
+  function lookaheadMove(empty) {
+    var b = s.board.slice(), deadline = Date.now() + THINK_MS, choice = empty[0];
+    // Centre-first, with ties in random order so the computer doesn't always open the same way.
+    var moves = empty.slice().sort(function () { return Math.random() - 0.5; });
+    moves.sort(function (a, c) { return ORDER.indexOf(a) - ORDER.indexOf(c); });
+    for (var depth = 1; depth <= empty.length; depth++) {
+      try {
+        var best = -Infinity, bestMove = moves[0];
+        moves.forEach(function (i) {
+          b[i] = 'O';
+          var v = search(b, 'X', depth - 1, best, Infinity, i, deadline);
+          b[i] = '';
+          if (v > best) { best = v; bestMove = i; }
+        });
+      } catch (e) {
+        if (e !== TIMEOUT) throw e;
+        break;
+      }
+      // A seen-through loss makes every move look alike; keep the shallower choice, which still blocks what it can.
+      if (best <= -BIG && depth > 1) break;
+      choice = bestMove;
+      if (best >= BIG) break; // a forced win is already found
+    }
+    return choice;
+  }
+
   function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
 
   function computerMove() {
     var empty = [];
-    for (var i = 0; i < 9; i++) if (!s.board[i]) empty.push(i);
+    for (var i = 0; i < s.board.length; i++) if (!s.board[i]) empty.push(i);
     if (s.level === 'easy' && Math.random() < 0.6) return pick(empty);
+    if (s.size > 3) return lookaheadMove(empty);
     var best = -2, moves = [];
     empty.forEach(function (i) {
       s.board[i] = 'O';
@@ -338,7 +445,7 @@ legend {
   function newRound() {
     clearTimeout(timer);
     if (result(s.board)) s.starter = other(s.starter);
-    s.board = ['', '', '', '', '', '', '', '', ''];
+    s.board = emptyBoard(s.size);
     s.turn = s.starter;
     render(true);
     queueComputer();
@@ -357,7 +464,7 @@ legend {
   }
 
   function render(animate) {
-    var r = result(s.board), vsComputer = s.opponent === 'computer';
+    var r = result(s.board), vsComputer = s.opponent === 'computer', n = s.size;
 
     cells.forEach(function (cell, i) {
       var m = s.board[i];
@@ -367,17 +474,17 @@ legend {
       }
       var blocked = !!m || !!r || computersTurn();
       cell.setAttribute('aria-disabled', blocked ? 'true' : 'false');
-      cell.setAttribute('aria-label', 'Row ' + (Math.floor(i / 3) + 1) + ', column ' + (i % 3 + 1) + ', ' + (m || 'empty'));
+      cell.setAttribute('aria-label', 'Row ' + (Math.floor(i / n) + 1) + ', column ' + (i % n + 1) + ', ' + (m || 'empty'));
     });
 
-    var key = r && r.line ? r.line.join('') : '';
+    var key = r && r.line ? r.line.join(',') : '';
     if (winEl.dataset.key !== key) {
       winEl.dataset.key = key;
       if (key) {
-        var a = r.line[0], c = r.line[2];
-        var x1 = a % 3 * 100 + 50, y1 = Math.floor(a / 3) * 100 + 50;
-        var x2 = c % 3 * 100 + 50, y2 = Math.floor(c / 3) * 100 + 50;
-        var len = Math.hypot(x2 - x1, y2 - y1), ux = (x2 - x1) / len * 34, uy = (y2 - y1) / len * 34;
+        var a = r.line[0], c = r.line[r.line.length - 1], w = 300 / n;
+        var x1 = (a % n + 0.5) * w, y1 = (Math.floor(a / n) + 0.5) * w;
+        var x2 = (c % n + 0.5) * w, y2 = (Math.floor(c / n) + 0.5) * w;
+        var len = Math.hypot(x2 - x1, y2 - y1), ux = (x2 - x1) / len * w * 0.34, uy = (y2 - y1) / len * w * 0.34;
         winEl.innerHTML = '<path class="stroke win win-' + r.mark + (animate ? ' draw' : '') + '" pathLength="1" d="M' + (x1 - ux) + ' ' + (y1 - uy + 2) + ' L' + (x2 + ux) + ' ' + (y2 + uy - 2) + '"/>';
       } else {
         winEl.innerHTML = '';
@@ -399,12 +506,50 @@ legend {
     $('label-X').textContent = vsComputer ? 'You (X)' : 'Player X';
     $('label-O').textContent = vsComputer ? 'Computer (O)' : 'Player O';
     $('level-set').hidden = !vsComputer;
+    $('lvl-hard-label').textContent = n === 3 ? 'Unbeatable' : 'Hard';
     $('new-round').classList.toggle('primary', !!r);
-    $('note').textContent = (vsComputer ? 'You play X. ' : 'Pass the device between turns. ') + 'The first move swaps sides after every finished round.';
+    $('note').textContent = (vsComputer ? 'You play X. ' : 'Pass the device between turns. ') +
+      (n > 3 ? 'Get ' + WIN_LENGTH[n] + ' in a row to win. ' : '') + 'The first move swaps sides after every finished round.';
+  }
+
+  // Lays out an n×n board: the cell buttons, the pencilled grid lines, and the win-line tables.
+  function setupBoard(n) {
+    s.size = n;
+    buildLines(n, WIN_LENGTH[n]);
+    boardEl.style.setProperty('--n', n);
+    boardEl.innerHTML = '';
+    cells = [];
+    for (var i = 0; i < n * n; i++) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'cell';
+      b.id = 'cell-' + i;
+      b.dataset.index = i;
+      b.dataset.mark = '';
+      boardEl.appendChild(b);
+      cells.push(b);
+    }
+    var grid = '';
+    for (var k = 1; k < n; k++) {
+      var p = Math.round(300 * k / n), d = k % 2 ? 3 : -3; // alternate the wobble so lines don't look ruled
+      grid += '<path d="M' + p + ' 8 C ' + (p - d) + ' 100, ' + (p + d) + ' 200, ' + p + ' 292"/>';
+      grid += '<path d="M8 ' + p + ' C 100 ' + (p + d) + ', 200 ' + (p - d) + ', 292 ' + p + '"/>';
+    }
+    $('grid').innerHTML = grid;
+    winEl.innerHTML = '';
+    winEl.dataset.key = '';
+  }
+
+  function resetGame() {
+    clearTimeout(timer);
+    s.starter = 'X';
+    s.turn = 'X';
+    s.board = emptyBoard(s.size);
+    render(true);
   }
 
   function save() {
-    try { localStorage.setItem(STORE, JSON.stringify({ opponent: s.opponent, level: s.level, scores: s.scores })); } catch (e) {}
+    try { localStorage.setItem(STORE, JSON.stringify({ opponent: s.opponent, level: s.level, size: s.size, scores: s.scores })); } catch (e) {}
   }
   function load() {
     try {
@@ -412,6 +557,7 @@ legend {
       if (!d) return;
       if (d.opponent === 'computer' || d.opponent === 'friend') s.opponent = d.opponent;
       if (d.level === 'easy' || d.level === 'hard') s.level = d.level;
+      if (WIN_LENGTH[d.size]) s.size = d.size;
       ['computer', 'friend'].forEach(function (m) {
         ['X', 'O', 'D'].forEach(function (k) {
           var v = d.scores && d.scores[m] && d.scores[m][k];
@@ -423,24 +569,16 @@ legend {
 
   function start(data) {
     load();
-    if (data && Array.isArray(data.board) && data.board.length === 9) {
+    if (data && WIN_LENGTH[data.size]) s.size = data.size;
+    s.board = emptyBoard(s.size);
+    if (data && Array.isArray(data.board) && data.board.length === s.size * s.size) {
       s.board = data.board.map(function (m) { return m === 'X' || m === 'O' ? m : ''; });
       if (data.turn === 'X' || data.turn === 'O') s.turn = data.turn;
       if (data.starter === 'X' || data.starter === 'O') s.starter = data.starter;
       if (data.opponent === 'computer' || data.opponent === 'friend') s.opponent = data.opponent;
       if (data.level === 'easy' || data.level === 'hard') s.level = data.level;
     }
-
-    for (var i = 0; i < 9; i++) {
-      var b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'cell';
-      b.id = 'cell-' + i;
-      b.dataset.index = i;
-      b.dataset.mark = '';
-      boardEl.appendChild(b);
-      cells.push(b);
-    }
+    setupBoard(s.size);
 
     boardEl.addEventListener('click', function (e) {
       var cell = e.target.closest('.cell');
@@ -453,14 +591,14 @@ legend {
     boardEl.addEventListener('keydown', function (e) {
       var cell = e.target.closest('.cell');
       if (!cell) return;
-      var i = +cell.dataset.index, row = Math.floor(i / 3), col = i % 3;
-      if (e.key === 'ArrowLeft') col = (col + 2) % 3;
-      else if (e.key === 'ArrowRight') col = (col + 1) % 3;
-      else if (e.key === 'ArrowUp') row = (row + 2) % 3;
-      else if (e.key === 'ArrowDown') row = (row + 1) % 3;
+      var n = s.size, i = +cell.dataset.index, row = Math.floor(i / n), col = i % n;
+      if (e.key === 'ArrowLeft') col = (col + n - 1) % n;
+      else if (e.key === 'ArrowRight') col = (col + 1) % n;
+      else if (e.key === 'ArrowUp') row = (row + n - 1) % n;
+      else if (e.key === 'ArrowDown') row = (row + 1) % n;
       else return;
       e.preventDefault();
-      cells[row * 3 + col].focus();
+      cells[row * n + col].focus();
     });
 
     $('new-round').addEventListener('click', newRound);
@@ -475,12 +613,17 @@ legend {
       el.addEventListener('change', function () {
         if (!el.checked) return;
         s.opponent = el.value;
-        s.starter = 'X';
         save();
-        clearTimeout(timer);
-        s.board = ['', '', '', '', '', '', '', '', ''];
-        s.turn = 'X';
-        render(true);
+        resetGame();
+      });
+    });
+    document.querySelectorAll('input[name="size"]').forEach(function (el) {
+      el.checked = +el.value === s.size;
+      el.addEventListener('change', function () {
+        if (!el.checked) return;
+        setupBoard(+el.value);
+        save();
+        resetGame();
       });
     });
     document.querySelectorAll('input[name="level"]').forEach(function (el) {
@@ -497,7 +640,7 @@ legend {
   var hot = window.claude && window.claude.hot;
   if (hot && hot.snapshot) {
     hot.snapshot(function () {
-      return { board: s.board, turn: s.turn, starter: s.starter, opponent: s.opponent, level: s.level };
+      return { size: s.size, board: s.board, turn: s.turn, starter: s.starter, opponent: s.opponent, level: s.level };
     });
   }
   if (hot && hot.ready) hot.ready(start);
