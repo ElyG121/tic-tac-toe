@@ -228,6 +228,27 @@ legend {
 .seg input:focus-visible + label { outline: 3px solid var(--x); outline-offset: -3px; }
 .seg input:disabled + label { opacity: 0.45; cursor: not-allowed; }
 .note { margin: 0; color: var(--muted); font-size: 0.9rem; max-width: 65ch; }
+
+/* "How does the computer play?" pop-up: the section for the game you're playing is tinted and labelled. */
+.explain {
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  padding: 20px 22px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 2px solid var(--pencil);
+  border-radius: 12px;
+}
+.explain::backdrop { background: rgba(0, 0, 0, 0.45); }
+.explain h2 { margin: 0 0 6px; font-family: var(--display); font-size: 1.6rem; line-height: 1.2; }
+.explain h3 { margin: 0 0 4px; font-family: var(--display); font-size: 1.2rem; line-height: 1.25; }
+.explain p, .explain ul { margin: 0 0 8px; }
+.explain ul { padding-left: 20px; }
+.explain-intro { color: var(--muted); }
+.explain section { margin: 0 -10px 10px; padding: 10px; border-radius: 8px; }
+.explain section.current { background: var(--hover); box-shadow: inset 0 0 0 2px var(--rule); }
+.explain section.current h3::after { content: " \2190 your game"; font-family: var(--ui); font-size: 0.8rem; font-weight: 700; color: var(--muted); }
+.explain form { margin: 4px 0 0; text-align: right; }
 </style>
 </head>
 <body>
@@ -267,7 +288,56 @@ legend {
   <div class="actions">
     <button class="btn" id="new-round" type="button">New round</button>
     <button class="btn" id="clear-scores" type="button">Clear scores</button>
+    <button class="btn" id="how-btn" type="button" aria-haspopup="dialog">How does the computer play?</button>
   </div>
+
+  <dialog class="explain" id="explain" aria-labelledby="explain-title">
+    <h2 id="explain-title">How the computer plays</h2>
+    <p class="explain-intro">No magic, no cheating: it only sees the same board you do. Here's what goes on in its head.</p>
+
+    <section data-mode="easy">
+      <h3>Easy: the daydreamer</h3>
+      <p>Most of the time (6 moves out of 10) it's off in its own world and just drops its O on any free square. The other 4 times it snaps awake and plays its very best move. So it can surprise you, but you can definitely beat it!</p>
+    </section>
+
+    <section data-mode="size3">
+      <h3>Unbeatable 3&#215;3: the fortune teller</h3>
+      <p>Before every move it imagines <em>every</em> way the rest of the game could go: each move, each reply, all the way to the end. A 3&#215;3 board only has a few hundred thousand possible games, and a computer can flip through them all in a blink.</p>
+      <p>It assumes you'll play perfectly too, and picks the move that works out best for it anyway. That's why the best you can do is a draw. (Grown-ups call this <strong>minimax</strong>.)</p>
+    </section>
+
+    <section data-mode="big">
+      <h3>Hard 4&#215;4 and 5&#215;5: the speed thinker</h3>
+      <p>Bigger boards have billions and billions of possible games, far too many to imagine them all. So the computer gets a timer: about a third of a second per move. It looks 1 move ahead, then 2, then 3, going as deep as it can before the timer rings.</p>
+      <p>When it can't see the ending, it guesses who's winning by checking every possible line:</p>
+      <ul>
+        <li>A line with only O's in it is good news, and every extra O makes it <em>ten times</em> better.</li>
+        <li>A line with only X's in it is bad news, by the same amount.</li>
+        <li>A line with both X and O is blocked, so it's worth nothing.</li>
+      </ul>
+      <p>It also tries the middle squares first, and skips moves it can already tell are worse (that trick is called <strong>alpha-beta pruning</strong>). Clever, but it can't see everything, so set it a trap that's further ahead than it can look!</p>
+    </section>
+
+    <section data-mode="ultimate">
+      <h3>Hard Ultimate: the big-picture planner</h3>
+      <p>The same timer trick, but it keeps score its own way:</p>
+      <ul>
+        <li>Winning a small board: worth a lot.</li>
+        <li>Two won small boards in a row on the big board: worth even more.</li>
+        <li>Two in a row inside a small board: a little bonus.</li>
+        <li>Sending you to a finished board: it hates that, because then you get to play anywhere!</li>
+      </ul>
+    </section>
+
+    <section data-mode="cube">
+      <h3>3D cube: still in training</h3>
+      <p>There's no computer for the cube yet, so grab a friend and take turns!</p>
+    </section>
+
+    <form method="dialog">
+      <button class="btn primary" type="submit">Got it!</button>
+    </form>
+  </dialog>
 
   <div class="settings">
     <fieldset>
@@ -1078,6 +1148,21 @@ legend {
     $('reset-view').addEventListener('click', function () {
       $('spread').value = 1.5;
       if (cubeView) { cubeView.setSpread(1.5); cubeView.resetView(); }
+    });
+
+    $('how-btn').addEventListener('click', function () {
+      var mode = s.size === CUBE ? 'cube' : s.level === 'easy' ? 'easy' : s.size === 3 ? 'size3' : s.size === ULTIMATE ? 'ultimate' : 'big';
+      var current = null;
+      document.querySelectorAll('#explain section').forEach(function (sec) {
+        sec.classList.toggle('current', sec.dataset.mode === mode);
+        if (sec.dataset.mode === mode) current = sec;
+      });
+      $('explain').showModal();
+      if (current) current.scrollIntoView({ block: 'nearest' });
+    });
+    $('explain').addEventListener('click', function (e) {
+      var r = this.getBoundingClientRect(); // a click on the dimmed backdrop (outside the box) closes it
+      if (e.target === this && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) this.close();
     });
 
     $('new-round').addEventListener('click', newRound);
